@@ -1,3 +1,6 @@
 [submodule "extern/Framework-ArkServerApi"]
 	path = extern/Framework-ArkServerApi
 	url = https://github.com/ServersHub/Framework-ArkServerApi.git
+[submodule "extern/mysql-modern-cpp"]
+	path = extern/mysql-modern-cpp
+	url = https://github.com/daotrungkien/mysql-modern-cpp.git
