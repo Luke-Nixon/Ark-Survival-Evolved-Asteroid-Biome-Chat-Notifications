@@ -1,7 +1,9 @@
 #include <API/ARK/Ark.h>
 #include <mysql+++.h>
-#pragma comment(lib, "ArkApi.lib")
-#pragma comment(lib, "mysqlclient.lib")
+#include <json.hpp>
+#include <fstream>
+// #pragma comment(lib, "ArkApi.lib")
+// #pragma comment(lib, "mysqlclient.lib")
 
 daotk::mysql::connection my;
 FString mapname("");
@@ -30,16 +32,59 @@ void ConnectDatabase()
 {
 	try
 	{
-		my.open("server","username","password","dbname"); // change these for your setup.
-		
+		const std::string path = ArkApi::Tools::GetCurrentDir() + "/ArkApi/Plugins/AsteroidBiomeChatNotifications/config.json";
+		std::ifstream file(path);
+		if (!file.is_open())
+		{
+			Log::GetLog()->error("Could not open config.json at {}", path);
+			return;
+		}
+
+		nlohmann::json config;
+		file >> config;
+
+		const std::string host = config["Mysql"]["Host"];
+		const std::string user = config["Mysql"]["User"];
+		const std::string pass = config["Mysql"]["Pass"];
+		const std::string db = config["Mysql"]["Db"];
+		const int port = config["Mysql"]["Port"];
+
+		daotk::mysql::connect_options options;
+		options.server = host;
+		options.username = user;
+		options.password = pass;
+		options.dbname = db;
+		options.port = port;
+		options.ssl_mode = 1; // 1 = SSL_MODE_DISABLED
+
+		Log::GetLog()->info("Connecting to DB at {}:{} with user '{}'...", host, port, user);
+
+		my.open(options);
 
 		if (!my)
 		{
-			Log::GetLog()->error("MYSQL connection could not be established!?");
+			Log::GetLog()->info("Raw check: host='{}', user='{}', db='{}', port={}", host, user, db, port);
+			// Try a raw connection just to capture the error message for the user if the wrapper fails
+			MYSQL* temp = mysql_init(nullptr);
+			if (temp) {
+				my_bool b = 0; 
+				mysql_options(temp, MYSQL_OPT_SSL_ENFORCE, &b);
+				mysql_options(temp, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &b);
+				mysql_ssl_set(temp, nullptr, nullptr, nullptr, nullptr, nullptr);
+
+				if (mysql_real_connect(temp, host.c_str(), user.c_str(), pass.c_str(), db.c_str(), (unsigned int)port, nullptr, 0) == nullptr)
+				{
+					Log::GetLog()->error("Raw Check Failed! Error: {} (Code: {})", mysql_error(temp), mysql_errno(temp));
+				}
+				else {
+					Log::GetLog()->info("Raw Check Succeeded! (SSL was disabled manually)");
+				}
+				mysql_close(temp);
+			}
 		}
 		else
 		{
-			Log::GetLog()->info("MYSQL connection was established sucsessfully. :)");
+			Log::GetLog()->info("MYSQL connection was established sucsessfully! :)");
 		}
 	}
 	catch (const std::exception& ex)
@@ -47,7 +92,6 @@ void ConnectDatabase()
 		Log::GetLog()->warn("problem in ConnectDatabase:");
 		Log::GetLog()->warn(ex.what());
 	}
-
 }
 
 // list of all possible biomes as of 09/09/2023

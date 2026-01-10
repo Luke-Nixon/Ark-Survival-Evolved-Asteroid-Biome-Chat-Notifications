@@ -1,0 +1,36 @@
+# CMake
+build/
+bin/
+lib/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.suo
+*.db
+*.opendb
+*.sdf
+*.ipch
+
+# Temporary Logs
+build_log*.txt
+build_output.txt
+
+# Artifacts
+*.zip
+*.dll
+*.pdb
+*.exp
+*.lib
+
+# OS
+.DS_Store
+Thumbs.db
