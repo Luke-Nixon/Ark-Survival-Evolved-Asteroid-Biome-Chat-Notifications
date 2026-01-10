@@ -10,18 +10,20 @@ This project uses **CMake** to manage the build process. Follow these steps to c
 ## Dependencies
 
 ### 1. Ark Server API (Framework)
-The Ark API is included as a Git submodule in `extern/Framework-ArkServerApi`. If you didn't clone with `--recursive`, run:
+The Ark API is included as a Git submodule in `extern/Framework-ArkServerApi`. If the folder is empty, run:
 ```powershell
 git submodule update --init --recursive
 ```
 
 ### 2. MariaDB Connector/C
-The plugin requires the **MariaDB Connector/C** for database interaction.
-*   **Download**: Download the Windows x86_64 ZIP version from the [Official MariaDB Site](https://mariadb.com/downloads/connectors/).
-*   **Placement**: Extract it to `extern/MariaDB Connector C 64-bit`.
-*   **CRITICAL (Static Linking)**: To avoid runtime DLL errors on the server, we use **static linking**.
-    *   The build is configured to link against `mariadbclient.lib` (the static library) rather than `libmariadb.lib` (the dynamic import library).
-    *   Additional Windows system libraries (`ws2_32`, `Bcrypt`, etc.) are automatically handled by the `CMakeLists.txt`.
+For convenience, the necessary headers and static libraries are **already included in `/extern/MariaDB Connector C 64-bit/`**. 
+*   If you need to update it, download the Windows x86_64 ZIP version from the [Official MariaDB Site](https://mariadb.com/downloads/connectors/).
+*   **Static Linking**: We link against `mariadbclient.lib` (the static library) to ensure the plugin is self-contained and stable on the server.
+
+### 3. Custom Patches (mysql+++)
+The `mysql+++` library (in `extern/mysql-modern-cpp`) has been patched to support disabling SSL for remote connections. 
+*   This patch is located in `/patches/mysql+++/`. 
+*   **CMake automatically prioritizes this patch** over the original submodule file during compilation.
 
 ### 3. Static Runtime (Visual C++)
 This project is configured to use the **Static Runtime Library (/MT)**. This is essential for Ark Server API plugins to ensure stability and avoid crashes when using standard library objects (like `std::mutex` or `std::string`) within the game server environment.
