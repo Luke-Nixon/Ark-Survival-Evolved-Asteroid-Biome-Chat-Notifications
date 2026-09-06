@@ -109,6 +109,15 @@ std::string biomes[] = {
 // send the new asteroid biome notification to the databse.
 void SendAsteroidNotification(int zone)
 {
+	// `zone` arrives straight from the game's NetEndWarp "index" parameter and is
+	// used to index a fixed-size array. Anything outside the known biomes would be
+	// an out-of-bounds read, so refuse it rather than take the chance.
+	if (zone < 0 || zone >= static_cast<int>(sizeof(biomes) / sizeof(biomes[0])))
+	{
+		Log::GetLog()->error("Asteroid zone index out of range: " + std::to_string(zone));
+		return;
+	}
+
 	std::string contents = "A new asteroid biome has been reached. Asteroid Biome contains: " + biomes[zone];
 
 	try
@@ -117,15 +126,28 @@ void SendAsteroidNotification(int zone)
 		std::string tribename = "Asteroid Zone";
 		std::string smapname = mapname.ToString();
 
-		if (!my)
+		// A connection that was established and has since been dropped - the
+		// database restarting, a timeout, a network blip - still tests truthy,
+		// so `!my` on its own never triggers a reconnect. is_open() is what
+		// actually reflects the state of the socket.
+		if (!my || !my.is_open())
 		{
-			Log::GetLog()->warn("problem in PostLatestChat with the database");
+			Log::GetLog()->warn("Database connection is not open, reconnecting...");
 			ConnectDatabase();
 		}
 
-		Log::GetLog()->info("is DB open " + std::to_string(my.is_open()));
+		// If it is still down, give up quietly rather than carrying on.
+		// Constructing a prepared_stmt against a dead connection makes
+		// mysql_stmt_init() return NULL, which the wrapper then dereferences.
+		// That is an access violation rather than a C++ exception, so the catch
+		// below cannot intercept it and the entire server process dies.
+		if (!my || !my.is_open())
+		{
+			Log::GetLog()->error("Database unavailable - skipping asteroid notification for zone " + std::to_string(zone));
+			return;
+		}
 
-		Log::GetLog()->warn("Sending Asteroid Notification: " + std::to_string(zone));
+		Log::GetLog()->info("Sending Asteroid Notification: " + std::to_string(zone));
 
 		daotk::mysql::prepared_stmt stmt(my, "INSERT into messages (`name`,`tribe`,`contents`,`originating_map`) VALUES (?,?,?,?);");
 		stmt.bind_param(player_name, tribename, contents, smapname);
