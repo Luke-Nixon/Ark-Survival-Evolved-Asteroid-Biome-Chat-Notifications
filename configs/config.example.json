@@ -1,0 +1,22 @@
+{
+  "_comment": "Every key here is optional - the plugin ships with working defaults and starts happily with no config.json at all. There are no credentials any more: announcements go through ArkCrossChat, which owns the database.",
+
+  "_comment_names": "Who the announcement appears to come from in chat.",
+  "sender_name": "INFO",
+  "tribe_name": "Asteroid Zone",
+
+  "_comment_prefix": "Put in front of the biome description.",
+  "message_prefix": "A new asteroid biome has been reached. Asteroid Biome contains: ",
+
+  "_comment_biomes": "Indexed by the game's NetEndWarp zone number, so ORDER IS THE CONTRACT. If you provide this list it replaces the built-in one wholesale rather than merging, because a partial list would shift every index after the one you changed and announce the wrong biome. Last checked against the game 2023-09-09.",
+  "biomes": [
+    "Ambergris, mutagel, metal and white supply crates.",
+    "Crystal, metal and green supply crates.",
+    "Metal, obsidian, sulfur and cyan supply crates.",
+    "Element shards, metal and purple supply crates.",
+    "Metal, gems, obsidian and yellow supply crates.",
+    "Metal, oil and red supply crates.",
+    "Element dust, metal and cyan supply crates.",
+    "Black pearls, mutagel, obsidian, metal and orange supply crates."
+  ]
+}

@@ -34,3 +34,8 @@ build_output.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# Local config, which an operator edits in place. The tracked copy was a
+# placeholder template and is now config.example.json; this plugin needs no
+# credentials at all, and a tracked config.json is how real ones get committed.
+configs/config.json

@@ -1,9 +1,0 @@
-{
-  "Mysql": {
-    "Host": "localhost",
-    "User": "root",
-    "Pass": "password",
-    "Db": "asteroid_notifications",
-    "Port": 3306
-  }
-}

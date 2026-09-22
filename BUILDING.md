@@ -1,57 +1,41 @@
-# Building from Source
+# Building
 
-This project uses **CMake** to manage the build process. Follow these steps to compile the plugin.
+## What you need
 
-## Prerequisites
+- **Visual Studio 2022 or newer**, with the C++ desktop workload (x64).
+- **CMake 3.15+** — the copy bundled with Visual Studio is fine and is usually
+  not on `PATH`:
+  `…\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe`
+- The **ArkServerApi framework**, vendored in `extern/Framework-ArkServerApi`.
 
-1.  **Visual Studio 2022 or 2026**: Ensure you have the "Desktop development with C++" workload installed.
-2.  **CMake**: Usually included with Visual Studio, or available as a standalone installation.
+That is the whole list. Earlier versions of this document also required MariaDB
+Connector/C, the `mysql+++` wrapper and a patch directory; the plugin no longer
+has a database, so none of that is needed or referenced by `CMakeLists.txt`.
 
-## Dependencies
+## Build
 
-### 1. Ark Server API (Framework)
-The Ark API is included as a Git submodule in `extern/Framework-ArkServerApi`. If the folder is empty, run:
-```powershell
-git submodule update --init --recursive
+```
+cmake -S . -B build
+cmake --build build --config Release
 ```
 
-### 2. MariaDB Connector/C
-For convenience, the necessary headers and static libraries are **already included in `/extern/MariaDB Connector C 64-bit/`**. 
-*   If you need to update it, download the Windows x86_64 ZIP version from the [Official MariaDB Site](https://mariadb.com/downloads/connectors/).
-*   **Static Linking**: We link against `mariadbclient.lib` (the static library) to ensure the plugin is self-contained and stable on the server.
+Output lands in `build/Release/AsteroidBiomeChatNotifications/`, and the
+post-build step packages `AsteroidBiomeChatNotifications.zip` beside it.
 
-### 3. Custom Patches (mysql+++)
-The `mysql+++` library (in `extern/mysql-modern-cpp`) has been patched to support disabling SSL for remote connections. 
-*   This patch is located in `/patches/mysql+++/`. 
-*   **CMake automatically prioritizes this patch** over the original submodule file during compilation.
+## What goes in the package
 
-### 3. Static Runtime (Visual C++)
-This project is configured to use the **Static Runtime Library (/MT)**. This is essential for Ark Server API plugins to ensure stability and avoid crashes when using standard library objects (like `std::mutex` or `std::string`) within the game server environment.
+`PluginInfo.json` and `config.example.json`, **by name**. The packaging step
+deliberately does not copy the whole `configs/` directory, because that sweeps
+in whatever is sitting there — including the `config.json` an operator edits
+locally. `configs/config.json` is gitignored and is never packaged.
 
-1.  **Open a terminal** (PowerShell or Command Prompt).
-2.  **Generate Build Files**:
-    ```powershell
-    cmake -B build -S .
-    ```
-    *(Note: If `cmake` is not in your PATH, use the one bundled with Visual Studio: `& "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -B build -S .`)*
+(The `config.json` this repository used to track held only placeholders, so
+nothing was ever exposed. Naming the files is about making that structural
+rather than lucky.)
 
-3.  **Compile the Project**:
-    ```powershell
-    cmake --build build --config Release
-    ```
+## Runtime dependency
 
-## Output
-
-The build files will be packaged in:
-`build/Release/AsteroidBiomeChatNotifications/`
-
-This folder includes:
-- `AsteroidBiomeChatNotifications.dll` (The plugin)
-- `AsteroidBiomeChatNotifications.pdb` (Debug info)
-- `config.json` (Database configuration)
-- `PluginInfo.json` (Ark API plugin metadata)
-
-## Project Configuration
-
-The plugin expects its configuration files to be located in:
-`ShooterGame/Binaries/Win64/ArkApi/Plugins/AsteroidBiomeChatNotifications/`
+The built DLL links `ArkApi` only. At runtime it resolves `CrossChat_Post` from
+`ArkCrossChat.dll` with `GetModuleHandle` + `GetProcAddress`, **at every call and
+never cached** — ArkApi hot-reloads plugin DLLs, so a pointer kept from an
+earlier call can point into freed code.
