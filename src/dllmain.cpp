@@ -100,6 +100,12 @@ std::atomic<int> g_net_end_warp{ -1 };
 std::atomic<bool> g_hooks_installed{ false };
 std::atomic<bool> g_begin_play_hooked{ false };
 std::atomic<bool> g_process_internal_hooked{ false };
+
+// The retry tick is not a hook, but it comes off the same way and for the same
+// reason: a callback left on ArkApi's list after this module is freed is a call
+// into freed code, exactly like a live detour.
+std::atomic<bool> g_tick_installed{ false };
+const char* const kTickId = "AsteroidBiome.Tick";
 std::string g_module_dir;
 
 // ArkCrossChat's exported announcer. Resolved at EVERY call and never cached.
@@ -228,32 +234,114 @@ void LoadConfig()
 }
 
 // Find the blueprint function whose call we want to notice. Only Genesis 2 has
-// it; anywhere else both lookups fail and the plugin stays inert for the life
-// of the process, which is intended and not an error.
-void FindWatchedFunction()
+// it; anywhere else the lookup fails and the plugin stays inert, which is
+// intended and not an error.
+//
+// NEVER CALL THIS FROM Plugin_Init. That is not a style preference - it took
+// Gen2 down for 44 minutes on 2026-09-22.
+//
+// Plugin_Init runs at UEngine::Init, long before the level is loaded. Calling
+// BPLoadClass there does not fail harmlessly as one might hope: it succeeded,
+// took about two minutes, logged the index - and the server then stopped dead
+// partway through its own startup, sitting at zero CPU with a 131 MB working
+// set where a loaded Gen2 holds about 10 GB. It never finished loading and
+// never answered RCON. Reverting the plugin fixed it; the same binary without
+// this call is what now runs.
+//
+// So it is reached from two places that both run after the world exists: the
+// BeginPlay hook, and a tick that covers the hot-reload case, where BeginPlay
+// has already been and gone - the same shape ArkCrossChat uses to start its
+// relay, which has been running on thirteen maps without trouble.
+//
+// Returns true once the index has been found. `quiet` suppresses the two
+// "nothing to watch here" lines, so the tick can retry without writing the same
+// line to the log on every attempt.
+bool FindWatchedFunction(bool quiet)
 {
-	if (g_net_end_warp.load() >= 0) return;
+	if (g_net_end_warp.load() >= 0) return true;
 
 	FString path("Blueprint'/Game/Genesis2/CoreBlueprints/Environment/DayCycleManager_Gen2.DayCycleManager_Gen2'");
 	UClass* day_manager = UVictoryCore::BPLoadClass(&path);
 	if (day_manager == nullptr)
 	{
-		Log::GetLog()->info("[asteroid] no Genesis 2 day cycle manager on this map - staying idle");
-		return;
+		if (!quiet)
+			Log::GetLog()->info("[asteroid] no Genesis 2 day cycle manager on this map - staying idle");
+		return false;
 	}
 
 	UFunction* fn = day_manager->FindFunctionByName(FName("NetEndWarp", EFindName::FNAME_Find),
 	                                                EIncludeSuperFlag::ExcludeSuper);
 	if (fn == nullptr)
 	{
-		Log::GetLog()->warn("[asteroid] DayCycleManager_Gen2 has no NetEndWarp - "
-		                    "the game may have renamed it; staying idle");
-		return;
+		if (!quiet)
+			Log::GetLog()->warn("[asteroid] DayCycleManager_Gen2 has no NetEndWarp - "
+			                    "the game may have renamed it; staying idle");
+		return false;
 	}
 
 	g_net_end_warp.store(fn->InternalIndexField());
 	Log::GetLog()->info("[asteroid] watching NetEndWarp (index " +
 	                    std::to_string(g_net_end_warp.load()) + ")");
+	return true;
+}
+
+// How long the retry runs before giving up, and how often it tries inside that
+// window. Thirty seconds is generous for a world that is already up - this only
+// does any work on a hot reload - and the interval keeps a failing lookup off
+// the game thread on all but one frame in thirty.
+constexpr float kLookupWindowSeconds = 30.0f;
+constexpr float kLookupIntervalSeconds = 1.0f;
+
+void StopTick()
+{
+	if (g_tick_installed.exchange(false))
+		ArkApi::GetCommands().RemoveOnTickCallback(kTickId);
+}
+
+// Covers the hot-reload case: if this plugin is swapped in while the map is
+// already running, BeginPlay has been and gone. UWorld::Tick is the earliest
+// callback guaranteed to run with the world up, which is the entire point - see
+// the banner above.
+//
+// IT MUST STOP ITSELF. On the twelve maps that are not Genesis 2 the lookup
+// never succeeds, so a tick that merely retried would call BPLoadClass and write
+// a log line on every frame for the life of the process. It gets a budget
+// instead: one quiet attempt a second for kLookupWindowSeconds, then it takes
+// itself off the list whatever the answer, logging once on the way out. On a
+// cold start BeginPlay settles the question and removes it before it ever runs.
+//
+// Removing a callback from inside the tick is safe: CheckOnTickCallbacks
+// iterates a copy of the vector, so the erase cannot invalidate it.
+void OnTick(float delta_seconds)
+{
+	// UWorld::Tick is the only caller, so these need no synchronisation.
+	static float elapsed = 0.0f;
+	static float since_attempt = 0.0f;
+
+	if (g_net_end_warp.load(std::memory_order_relaxed) >= 0)
+	{
+		StopTick();
+		return;
+	}
+
+	elapsed += delta_seconds;
+	since_attempt += delta_seconds;
+
+	const bool last_attempt = elapsed >= kLookupWindowSeconds;
+	if (since_attempt < kLookupIntervalSeconds && !last_attempt) return;
+	since_attempt = 0.0f;
+
+	bool found = false;
+	try
+	{
+		found = FindWatchedFunction(!last_attempt);
+	}
+	catch (...)
+	{
+		// A throw out of a tick callback would take the map with it.
+	}
+
+	if (found || last_attempt) StopTick();
 }
 
 DECLARE_HOOK(AShooterGameMode_BeginPlay, void, AShooterGameMode*);
@@ -262,7 +350,12 @@ void Hook_AShooterGameMode_BeginPlay(AShooterGameMode* _this)
 	AShooterGameMode_BeginPlay_original(_this);
 	try
 	{
-		FindWatchedFunction();
+		FindWatchedFunction(false);
+
+		// The world is up, so the answer is settled either way and the hot-reload
+		// retry has nothing left to do. On a cold start this is what stops the
+		// tick before its first frame.
+		StopTick();
 	}
 	catch (const std::exception& ex)
 	{
@@ -383,16 +476,20 @@ extern "C" __declspec(dllexport) void Plugin_Init()
 		g_hooks_installed = begin_play_ok || process_internal_ok;
 
 		if (!begin_play_ok)
-			Log::GetLog()->error("[asteroid] could not hook AShooterGameMode.BeginPlay - "
-			                     "the watched function will only be found if Plugin_Init's own "
-			                     "attempt below succeeds");
+			Log::GetLog()->warn("[asteroid] could not hook AShooterGameMode.BeginPlay - "
+			                    "the retry tick will have to find the watched function "
+			                    "instead, a moment later than it otherwise would");
 		if (!process_internal_ok)
 			Log::GetLog()->error("[asteroid] could not hook UObject.ProcessInternal - "
 			                     "NOTHING WILL EVER BE ANNOUNCED on this server");
 
-		// If the map is already up - a hot-reload rather than a cold start -
-		// BeginPlay has been and gone, so look now as well.
-		FindWatchedFunction();
+		// DELIBERATELY NOT LOOKED UP HERE. Plugin_Init runs inside UEngine::Init,
+		// before the world exists, and forcing that blueprint to load at this point
+		// is what hung Gen2 - see the banner on FindWatchedFunction. The hot-reload
+		// case is covered by the tick, which runs from UWorld::Tick and so cannot
+		// fire until the world is up.
+		ArkApi::GetCommands().AddOnTickCallback(kTickId, &OnTick);
+		g_tick_installed = true;
 
 		if (process_internal_ok)
 		{
@@ -414,6 +511,11 @@ extern "C" __declspec(dllexport) void Plugin_Unload()
 {
 	try
 	{
+		// Order matters: the tick comes off first, so nothing of ours can still be
+		// running while the detours are removed.
+		if (g_tick_installed.exchange(false))
+			ArkApi::GetCommands().RemoveOnTickCallback(kTickId);
+
 		// The detours must not be live when this module is freed. The previous
 		// version left all three installed, which is a crash waiting for the
 		// next call into freed code rather than an error anybody would see.
